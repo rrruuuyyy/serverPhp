@@ -19,6 +19,7 @@ $postdata = file_get_contents("php://input");
     $lugarExpedicion = $data['lugarExpedicion'];
     $metodoPago = $data['metodoPago'];
     $tipoDeComprobante = $data['tipoDeComprobante'];
+    $tipoDeCambio = $data['tipoDeCambio'];
     $total = $data['total'];
     $moneda = $data['moneda'];
     $descuento = $data['descuento'];
@@ -27,13 +28,15 @@ $postdata = file_get_contents("php://input");
     $formaPago = $data['formaPago'];
     $folio = $data['folio'];
     $serie = $data['serie'];
-
     $emisorRfc = $data['emisorRfc'];
     $emisorNombre = $data['emisorNombre'];
     $emisorRegimenFiscal = $data['emisorRegimenFiscal'];
     $receptorRfc = $data['receptorRfc'];
     $receptorNombre = $data['receptorNombre'];
     $usoCFDI = $data['usoCFDI'];
+
+    // Variable de conceptos
+    $conceptos = $data['conceptos'];
 
     /* Vamos a crear un XML con XMLWriter a partir de la matriz anterior. 
     Lo vamos a crear usando programación orientada a objetos. 
@@ -60,7 +63,7 @@ $postdata = file_get_contents("php://input");
         $objetoXML->writeAttribute("Descuento", $descuento);
     }
     $objetoXML->writeAttribute("SubTotal", $subTotal);
-    if ($condicionesDePago = "") {
+    if ($condicionesDePago != "") {
         $objetoXML->writeAttribute("CondicionesDePago", $condicionesDePago);
     }
     $objetoXML->writeAttribute("FormaPago", $formaPago);
@@ -69,6 +72,9 @@ $postdata = file_get_contents("php://input");
     }
     if($serie != ""){
         $objetoXML->writeAttribute("Serie", $serie);
+    }
+    if($tipoDeCambio != ""){
+        $objetoXML->writeAttribute("TipoDeCambio", $tipoDeCambio);
     }
     $objetoXML->startElement("cfdi:Emisor");
     $objetoXML->writeAttribute("RegimenFiscal",$emisorRegimenFiscal);
@@ -81,23 +87,130 @@ $postdata = file_get_contents("php://input");
     $objetoXML->writeAttribute("Rfc",$receptorRfc);
     $objetoXML->writeAttribute("UsoCFDI",$usoCFDI);
     $objetoXML->endElement(); // Final del nodo raíz, "cfdi:Receptor"
-
+    $cont = count($conceptos);
     $objetoXML->startElement("cfdi:Conceptos");
+    for ($i=0; $i < $cont ; $i++) { 
+        $objetoXML->startElement("cfdi:Concepto");
+        $objetoXML->writeAttribute("Importe",$conceptos[$i]['importe']);
+        $objetoXML->writeAttribute("ValorUnitario",$conceptos[$i]['valorUnitario']);
+        $objetoXML->writeAttribute("Descripcion",$conceptos[$i]['descripcion']);
+        $objetoXML->writeAttribute("Unidad",$conceptos[$i]['unidad']);
+        $objetoXML->writeAttribute("ClaveUnidad",$conceptos[$i]['claveUnidad']);
+        $objetoXML->writeAttribute("Cantidad",$conceptos[$i]['cantidad']);
+        $objetoXML->writeAttribute("ClaveProdServ",$conceptos[$i]['claveProdServ']);
 
+            // INICIO IMPUESTOS/CONCEPTOS
+            $objetoXML->startElement("cfdi:Impuestos");
+            // VARIABLES DE BANDERAS PARA DETERMINAR SI TIENE RETENIDOS Y TRANSLADOS
+            $conRetenidos = false;
+            $conTransladados = false;
+            // FOR - RECORRE CADA IMPUESTO Y DETERMINA SI HAY RETENIDOS O TRASLADO
+            for ($j=0; $j < count($conceptos[$i]['impuestos']) ; $j++) {
+                if ($conceptos[$i]['impuestos'][$j]['claseImpuesto'] === "retenido") {
+                    $conRetenidos = true;
+                }else{
+                    $conTransladados = true;
+                }
+            }
+            // SI HAY TRASLADOS SE EJECUTA LO SIGUIENTE
+            if($conTransladados){
+                $totalTraslados = 0;
+                $objetoXML->startElement("cfdi:Traslados"); //OPEN ETIQUETA TRASLADOS
+                for ($j=0; $j < count($conceptos[$i]['impuestos']) ; $j++) {
+                    if($conceptos[$i]['impuestos'][$j]['claseImpuesto'] === 'transladado'){
+                        $totalTraslados = $totalTraslados + $conceptos[$i]['impuestos'][$j]['importe'];
+                        $objetoXML->startElement("cfdi:Traslado"); //SE ABRE ETIQUETA TRASLADO
+                        $objetoXML->writeAttribute("Importe",$conceptos[$i]['impuestos'][$j]['importe']);
+                        $objetoXML->writeAttribute("TasaOCuota",$conceptos[$i]['impuestos'][$j]['importe'] ."0000");
+                        $objetoXML->writeAttribute("TipoFactor",$conceptos[$i]['impuestos'][$j]['tipo']);
+                        $objetoXML->writeAttribute("Impuesto",$conceptos[$i]['impuestos'][$j]['idImpuesto']);
+                        $objetoXML->writeAttribute("Base",$conceptos[$i]['impuestos'][$j]['base']);
+                        $objetoXML->endElement();   //SE CIERRA ETIQUETA TRASLADO
+                    }
+                }
+                $objetoXML->endElement(); //SE CIERRA TRASLADOS
+            }
+            if($conRetenidos){
+                // SI SE DETECTARON RETENIDOS SE EJECUTA LO SIGUIENTE
+                $totalRetenidos = 0;
+                $objetoXML->startElement("cfdi:Retenciones");
+                for ($j=0; $j < count($conceptos[$i]['impuestos']) ; $j++) {
+                    if ($conceptos[$i]['impuestos'][$j]['claseImpuesto'] === "retenido") {
+
+                        $totalRetenidos = $totalRetenidos + $conceptos[$i]['impuestos'][$j]['importe'];
+                        $objetoXML->startElement("cfdi:Retencion"); //SE ABRE RETENIDO
+                        $objetoXML->writeAttribute("Importe",$conceptos[$i]['impuestos'][$j]['importe']);
+                        $objetoXML->writeAttribute("TasaOCuota",$conceptos[$i]['impuestos'][$j]['importe'] ."0000");
+                        $objetoXML->writeAttribute("TipoFactor",$conceptos[$i]['impuestos'][$j]['tipo']);
+                        $objetoXML->writeAttribute("Impuesto",$conceptos[$i]['impuestos'][$j]['idImpuesto']);
+                        $objetoXML->writeAttribute("Base",$conceptos[$i]['impuestos'][$j]['base']);
+                        $objetoXML->endElement(); //SE CIERRA RETENIDO
+                    }
+                }
+                $objetoXML->endElement(); //SE CIERRA RETENCIONES
+            }
+
+            $objetoXML->endElement(); // Final del nodo raíz, "cfdi:Imnpuestos"
+
+        $objetoXML->endElement(); // Final del nodo raíz, "cfdi:Concepto"
+    }
     $objetoXML->endElement(); // Final del nodo raíz, "cfdi:Conceptos"
 
-    $objetoXML->endElement(); // Final del nodo raíz, "cfdi:Comprobante"
-    $objetoXML->endDocument(); // Final del documento
+    //CODIGO DE AGRUPACION DE IMPUESTOS
+        $objetoXML->startElement("cfdi:Impuestos"); //SE ABRE IMPUS
+        if( $conTransladados){
+            $objetoXML->writeAttribute("TotalImpuestosTraslados",$totalTraslados);
 
-    $objetoXML->endElement(); // Final del nodo raíz, "obras"
-    $objetoXML->endDocument(); // Final del documento
+        }
+        if( $conRetenidos ){
+            $objetoXML->writeAttribute("TotalImpuestosRetenidos",$totalRetenidos);
+        }
+        if( $conRetenidos ){
+            // FOR PARA CAPTURAR RETENIDOS
+            $objetoXML->startElement("cfdi:Retenciones");
+            for ($j=0; $j < count($conceptos[$i]['impuestos']) ; $j++) {
+                if ($conceptos[$i]['impuestos'][$j]['claseImpuesto'] === "retenido") {
+
+                    $objetoXML->startElement("cfdi:Retencion"); //SE ABRE RETENIDO
+                    $objetoXML->writeAttribute("Importe",$conceptos[$i]['impuestos'][$j]['importe']);
+                    $objetoXML->writeAttribute("TasaOCuota",$conceptos[$i]['impuestos'][$j]['importe'] ."0000");
+                    $objetoXML->writeAttribute("TipoFactor",$conceptos[$i]['impuestos'][$j]['tipo']);
+                    $objetoXML->writeAttribute("Impuesto",$conceptos[$i]['impuestos'][$j]['idImpuesto']);
+                    $objetoXML->endElement(); //SE CIERRA RETENIDO
+                }
+            }
+            $objetoXML->endElement()
+        }
+        if( $conTransladados ){
+            $objetoXML->startElement("cfdi:Traslados"); //OPEN ETIQUETA TRASLADOS
+                for ($j=0; $j < count($conceptos[$i]['impuestos']) ; $j++) {
+                    if($conceptos[$i]['impuestos'][$j]['claseImpuesto'] === 'transladado'){
+                        $totalTraslados = $totalTraslados + $conceptos[$i]['impuestos'][$j]['importe'];
+                        $objetoXML->startElement("cfdi:Traslado"); //SE ABRE ETIQUETA TRASLADO
+                        $objetoXML->writeAttribute("Importe",$conceptos[$i]['impuestos'][$j]['importe']);
+                        $objetoXML->writeAttribute("TasaOCuota",$conceptos[$i]['impuestos'][$j]['importe'] ."0000");
+                        $objetoXML->writeAttribute("TipoFactor",$conceptos[$i]['impuestos'][$j]['tipo']);
+                        $objetoXML->writeAttribute("Impuesto",$conceptos[$i]['impuestos'][$j]['idImpuesto']);
+                        $objetoXML->endElement();   //SE CIERRA ETIQUETA TRASLADO
+                    }
+                }
+                $objetoXML->endElement(); //SE CIERRA TRASLADOS
+        }
+        $objetoXML->endElement(); // Final del nodo raíz, "cfdi:Impuestos"
+
+
+    $objetoXML->endElement(); // Final del nodo raíz, "cfdi:Comprobante"
+    $objetoXML->endDocument(); 
+
+
+    $objetoXML->endElement(); 
 
 	$result = array(
 		'status' => 'succes',
 		'code' => 200,
         'message' => 'xml creado correctamente',
         'Mensaje 2' => 'Eres un chongon we'
-	);
+    );
 	echo json_encode($result);
 
 // use Slim\Slim;
